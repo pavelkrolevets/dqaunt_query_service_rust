@@ -1,0 +1,4 @@
+### Deribit Data DB
+
+CREATE TABLE futures_contango_eth (base FLOAT, three_months FLOAT, six_months FLOAT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP PRIMARY KEY);
+CREATE TABLE futures_contango_btc (base FLOAT, three_months FLOAT, six_months FLOAT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP PRIMARY KEY);

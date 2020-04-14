@@ -1,19 +1,25 @@
 #[macro_use] extern crate mysql;
 use chrono::*;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use std::fmt::Error;
 //use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::ops::Mul;
+use deribit::models::{AuthRequest, Currency, GetPositionsRequest, PrivateSubscribeRequest, GetBookSummaryByInstrumentRequest, GetBookSummaryByCurrencyRequest};
+use deribit::DeribitBuilder;
+use deribit::DeribitError;
+use dotenv::dotenv;
+use futures::StreamExt;
+use std::env::var;
+use deribit::models::Currency::BTC;
+use std::{thread, time};
+
+const CONNECTION: &'static str = "wss://www.deribit.com/ws/api/v2";
 
 #[derive(Debug, PartialEq)]
 struct Data {
-    pub timestamp: i64,
     base: i64,
-    source_currency: String,
-    destination_currency: String,
-    forward_factor: f64,
-    backward_factor: f64
+    three_months: i64,
+    six_months: i64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -36,16 +42,16 @@ enum Exchange {
 //    currency: String
 //}
 
-pub fn parse_stdin(args: Vec<&str>) -> Result<(), Error>{
-
+pub fn parse_stdin(args: Vec<&str>) -> Result<(), DeribitError>{
     match args[0] {
-        "instruments" => parse_request(args),
-        _ => hello_world(args)
+        "start" => start(),
+        "stop" => hello_world(args),
+        _ => hello_world(args),
     };
     Ok(())
 }
 
-pub fn hello_world(args: Vec<&str>) -> Result<(), Error> {
+pub fn hello_world(args: Vec<&str>) -> Result<(), DeribitError> {
     println!("Args {:?}", args);
     Ok(())
 }
@@ -107,12 +113,12 @@ pub fn hello_world(args: Vec<&str>) -> Result<(), Error> {
 //
 //}
 
-fn parse_request(args: Vec<&str>) -> Result<(), Error>{
+fn get_instruments() -> Result<(Vec<Instruments>), DeribitError>{
     println!("DB query ...");
     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
     let instruments: Vec<Instruments> =
-        pool.prep_exec(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => &args[1].to_string(),
-        "kind_"=> &args[2].to_string(),
+        pool.prep_exec(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
+        "kind_"=> "future",
          })
             .map(|result| {
                 result.map(|x| x.unwrap()).map(|row| {
@@ -130,7 +136,8 @@ fn parse_request(args: Vec<&str>) -> Result<(), Error>{
             }).unwrap();
 
     println!("Instruments {:?}", instruments);
-    Ok(())
+
+    Ok(instruments)
 }
 
 
@@ -164,3 +171,71 @@ fn parse_request(args: Vec<&str>) -> Result<(), Error>{
 //        Ok(())
 //    }
 //}
+#[tokio::main]
+async fn start() -> Result<(), DeribitError> {
+    println!("Connecting to {}", CONNECTION);
+
+    let _ = dotenv();
+
+    let key = "0RSVo90R".to_string();
+    let secret = "T2FJDujLFttGUI-luTZ6AxYNIZ9sF14Jvegd3Unaeaw".to_string();
+
+    let drb = DeribitBuilder::default().testnet(false).build().unwrap();
+
+    let (mut client, mut subscription) = drb.connect().await?;
+
+    let _ = client
+        .call(AuthRequest::credential_auth(&key, &secret))
+        .await?;
+
+    let book = client
+        .call(GetBookSummaryByCurrencyRequest::futures(BTC))
+        .await?
+        .await?;
+
+    println!("{:?}", book);
+
+    // loop {
+    //     let book = client
+    //         .call(GetBookSummaryByCurrencyRequest::futures(BTC))
+    //         .await?
+    //         .await?;
+    //
+    //     println!("{:?}", book);
+    //
+    //     thread::sleep(time::Duration::from_secs(5));
+    // }
+
+    // let instrument = "ETH-PERPETUAL".to_string();
+    // let book = client
+    //     .call(GetBookSummaryByInstrumentRequest::instrument(&instrument))
+    //     .await?
+    //     .await?;
+    //
+    // println!("{:?}", book);
+
+    let instruments = get_instruments().unwrap();
+
+    let mut channels = vec![];
+
+    for item in instruments.iter(){
+        let mut inst_str = "book.".to_string();
+        inst_str.push_str(&item.instrument_name);
+        inst_str.push_str(".100.1.100ms");
+
+        &channels.insert(0, inst_str);
+    }
+    println!("Channels {:?}", &channels);
+
+    let req = PrivateSubscribeRequest::new(&channels);
+
+    let result = client.call(req).await?.await?;
+    println!("Subscription result: {:?}", result);
+
+    while let Some(sub) = subscription.next().await {
+        println!("{:?}", sub);
+    }
+
+    Ok(())
+
+}
