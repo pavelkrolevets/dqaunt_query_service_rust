@@ -19,3 +19,7 @@ futures = "0.3.4"
 tokio = "0.2.18"
 deribit = { path = "/Users/pavelkrolevets/Projects/deribit-rs" }
 dotenv = "0.15.0"
+env_logger = "0.7.1"
+fehler = "1.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
