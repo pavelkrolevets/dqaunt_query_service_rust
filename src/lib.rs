@@ -1,67 +1,64 @@
 #[macro_use] extern crate mysql;
 use chrono::*;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
-//use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::ops::Mul;
-use deribit::models::{AuthRequest, Currency, GetPositionsRequest, PrivateSubscribeRequest, GetBookSummaryByInstrumentRequest, GetBookSummaryByCurrencyRequest, PublicSubscribeRequest, SetHeartbeatRequest, SubscriptionParams, HeartbeatType, TestRequest, SubscribeResponse, TickerRequest, TickerResponse, GetInstrumentsRequest};
-use deribit::DeribitBuilder;
-use deribit::DeribitError;
-use dotenv::dotenv;
-use futures::StreamExt;
-use std::env::var;
-use deribit::models::Currency::{BTC, ETH};
-use std::{thread, time};
-use termion::event::Key::PageUp;
-use std::thread::sleep;
+// use std::time::{SystemTime, UNIX_EPOCH, Duration};
+// //use std::borrow::Borrow;
+// use std::collections::HashMap;
+// use std::ops::Mul;
+use std::error::Error;
+use deribit::models::subscription::TickerData;
+use std::borrow::Borrow;
+use std::ops::Deref;
 
-const CONNECTION: &'static str = "wss://www.deribit.com/ws/api/v2";
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq, Clone, Debug)]
 struct Data {
     base: i64,
     three_months: i64,
     six_months: i64,
 }
 
-#[derive(Debug, PartialEq)]
-struct Instruments {
+#[derive(PartialEq, Clone, Debug)]
+pub enum Expiration {
+    Base,
+    Three,
+    Six
+}
+
+#[derive(PartialEq, Clone, Debug)]
+pub enum InstrumentType {
+    BTC,
+    ETH,
+}
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct Instruments {
     pub id: u8,
-    instrument_name: String,
-    kind: String,
-    expiration_timestamp: i64,
-    is_active: bool,
-    timestamp: DateTime<Utc>
+    pub instrument_name: String,
+    pub kind: String,
+    pub expiration_timestamp: i64,
+    pub is_active: bool,
+    pub timestamp: DateTime<Utc>
 }
 
 
-enum Exchange {
+// pub fn parse_stdin(args: Vec<&str>) -> Result<(), Error>{
+//     match args[0] {
+//         "start" => start(),
+//         "stop" => hello_world(args),
+//         _ => start(),
+//     };
+//     Ok(())
+// }
 
-}
+// pub fn hello_world(args: Vec<&str>) -> Result<(), Error> {
+//     println!("Args {:?}", args);
+//     Ok(())
+// }
 
-//struct Vertex {
-//    exchange: String,
-//    currency: String
-//}
-
-pub fn parse_stdin(args: Vec<&str>) -> Result<(), DeribitError>{
-    match args[0] {
-        "start" => start(),
-        "stop" => hello_world(args),
-        _ => start(),
-    };
-    Ok(())
-}
-
-pub fn hello_world(args: Vec<&str>) -> Result<(), DeribitError> {
-    println!("Args {:?}", args);
-    Ok(())
-}
-
-fn get_instruments() -> Result<(Vec<Instruments>), DeribitError>{
-    println!("DB query ...");
+pub fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
+    // println!("DB query ...");
     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-    let instruments: Vec<Instruments> =
+    let instruments =
         pool.prep_exec(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
         "kind_"=> "future",
          })
@@ -80,107 +77,154 @@ fn get_instruments() -> Result<(Vec<Instruments>), DeribitError>{
                 }).collect()
             }).unwrap();
 
-    println!("Instruments {:?}", instruments);
+    // println!("Instruments {:?}", instruments);
 
     Ok(instruments)
 }
 
-fn write_to_db (msg: SubscribeResponse) -> Result<(), DeribitError>{
-    println!("{:?}", &msg);
+pub fn get_timestamp (timestamp: i64) -> Result<DateTime<Utc>, Box<dyn Error>> {
+    let naive = NaiveDateTime::from_timestamp(timestamp, 0);
+    let datetime: DateTime<Utc> = DateTime::from_utc(naive, Utc);
+    Ok(datetime)
+}
+
+pub fn get_expiration (msg: TickerData) -> Result<(), Box<dyn Error>>{
+
+    let instr = get_instruments().unwrap();
+    let mut instr_btc= vec![];
+    let mut instr_eth= vec![];
+
+    for item in instr.iter(){
+        if item.instrument_name[..3] == "BTC".to_string() {
+            instr_btc.insert(0, item.clone())
+        }
+        else if &item.instrument_name[..3] == "ETH".to_string() {
+            instr_eth.insert(0, item.clone())
+        }
+    }
+
+    // Sort by timestamp
+    // &instr_btc.sort_by(|a, b| b.expiration_timestamp.cmp(&a.expiration_timestamp));
+    // &instr_eth.sort_by(|a, b| b.expiration_timestamp.cmp(&a.expiration_timestamp));
+    //
+    // println!("BTC instruments by timestamp {:?}", &instr_btc);
+    // println!("ETH instruments by timestamp {:?}", &instr_eth);
+
+    let mut exp = Expiration::Base;
+    let mut currency = InstrumentType::BTC;
+
+    if msg.instrument_name[..3] == "BTC".to_string() {
+        let mut currency = InstrumentType::BTC;
+        for item in instr_btc.iter() {
+            if (item.instrument_name == msg.instrument_name) && (item.instrument_name != "BTC-PERPETUAL".to_string()) {
+                // println!("Found {:?}, expiration {:?}", &msg.instrument_name, &item.expiration_timestamp);
+
+                // let msg_exp = get_timestamp(item.expiration_timestamp).unwrap();
+                // let newdate = msg_exp.format("%Y-%m-%d %H:%M:%S").to_string();
+                // println!("Found {:?}, datetime {:?}", &msg.instrument_name, &newdate);
+
+                // find expiration of the futures
+                for i in instr_btc.iter() {
+                    if i.instrument_name != "BTC-PERPETUAL".to_string() {
+                        // let i_exp = get_timestamp(i.expiration_timestamp).unwrap();
+                        if item.expiration_timestamp > i.expiration_timestamp {
+                            exp = Expiration::Six
+                        } else if item.expiration_timestamp < i.expiration_timestamp {
+                            exp = Expiration::Three
+                        }
+                    }
+                }
+            } else if (item.instrument_name == msg.instrument_name) && (item.instrument_name == "BTC-PERPETUAL".to_string()) {
+                exp = Expiration::Base
+            }
+        }
+    }
+
+    if msg.instrument_name[..3] == "ETH".to_string() {
+        currency = InstrumentType::ETH;
+        for item in instr_eth.iter() {
+            if (item.instrument_name == msg.instrument_name) && (item.instrument_name != "ETH-PERPETUAL".to_string()) {
+                // println!("Found {:?}, expiration {:?}", &msg.instrument_name, &item.expiration_timestamp);
+
+                // let msg_exp = get_timestamp(item.expiration_timestamp).unwrap();
+                // let newdate = msg_exp.format("%Y-%m-%d %H:%M:%S").to_string();
+                // println!("Found {:?}, datetime {:?}", &msg.instrument_name, &newdate);
+
+                // find expiration of the futures
+                for i in instr_btc.iter() {
+                    if i.instrument_name != "ETH-PERPETUAL".to_string() {
+                        // let i_exp = get_timestamp(i.expiration_timestamp).unwrap();
+                        if item.expiration_timestamp > i.expiration_timestamp {
+                            exp = Expiration::Six
+                        } else if item.expiration_timestamp < i.expiration_timestamp {
+                            exp = Expiration::Three
+                        }
+                    }
+                }
+            } else if (item.instrument_name == msg.instrument_name) && (item.instrument_name == "ETH-PERPETUAL".to_string()){
+                exp = Expiration::Base
+            }
+        }
+    }
+
+    write_to_db(msg, exp, currency).unwrap();
+
     Ok(())
 }
 
+pub fn write_to_db (msg: TickerData, exp: Expiration, currency: InstrumentType) -> Result<(), Box<dyn Error>> {
 
-#[tokio::main]
-async fn start() -> Result<(), DeribitError> {
-    println!("Connecting to {}", CONNECTION);
+    match currency {
+        InstrumentType::BTC => {
+            match exp {
+                Expiration::Base => {
+                    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+                    for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc (base, is_active) VALUE (:base, :is_active)").into_iter() {
+                                    stmt.execute(params!{
+                                    "base" => 0i8,
+                                    "is_active" => 1i8,
+                               }).unwrap();
+                    }
+                    println!("Insert BTC Perpetual {:?}", &msg.instrument_name)
+                },
+                Expiration::Three=>{
+                    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+                    for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
+                                       (`three_months`, `is_active`)
+                                   VALUES
+                                       (:three_months, :is_active)").into_iter() {
+                        stmt.execute(params! {
+                                    "three_months" => &msg.last_price,
+                                    "is_active" => true,
+                               }).unwrap();
+                    }
+                    println!("Insert BTC Three {:?}", &msg.instrument_name)
 
-    let _ = dotenv();
+                },
+                Expiration::Six  => {
+                    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+                    for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
+                                       (`six_months`, `is_active`)
+                                   VALUES
+                                       (:six_months, :is_active)").into_iter() {
+                        stmt.execute(params! {
+                                    "six_months" => &msg.last_price,
+                                    "is_active" => true,
+                               }).unwrap();
+                    }
+                    println!("Insert BTC Six {:?}", &msg.instrument_name)
 
-    let key = "0RSVo90R".to_string();
-    let secret = "T2FJDujLFttGUI-luTZ6AxYNIZ9sF14Jvegd3Unaeaw".to_string();
-
-    let drb = DeribitBuilder::default().testnet(false).build().unwrap();
-
-    let (mut client, mut subscription) = drb.connect().await?;
-
-    // let _ = client
-    //     .call(AuthRequest::credential_auth(&key, &secret))
-    //     .await?;
-
-    // let positions = client
-    //     .call(GetPositionsRequest::futures(Currency::BTC))
-    //     .await?
-    //     .await?;
-    //
-    // println!("{:?}", positions);
-    //
-
-    loop {
-        let instruments = get_instruments().unwrap();
-        for item in instruments.iter(){
-            let ticker = client
-                .call(TickerRequest::instrument(&item.instrument_name.as_str()))
-                .await?
-                .await?;
-            println!("{:?}", ticker);
+                }
+            }
         }
-        let freez = time::Duration::from_secs(5);
-        sleep(freez)
+        InstrumentType::ETH => {
+            match exp {
+                Expiration::Base => println!("Insert ETH Perpetual {:?}", &msg.instrument_name),
+                Expiration::Three =>println!("Insert ETH Three {:?}", &msg.instrument_name),
+                Expiration::Six => println!("Insert EHT Six {:?}", &msg.instrument_name)
+            }
+        }
     }
 
-
-    // let instr = client
-    //     .call_raw(GetInstrumentsRequest::options(ETH))
-    //     .await?
-    //     .await?;
-    //
-    // println!("{:?}", instr);
-
-    // let book = client
-    //     .call_raw(GetBookSummaryByInstrumentRequest::instrument("ETH-25SEP20".into()))
-    //     .await?
-    //     .await?;
-    //
-    // println!("{:?}", book);
-
-    // let instruments = get_instruments().unwrap();
-    // let mut channels = vec![];
-    //
-    // for item in instruments.iter(){
-    //     let mut inst_str = "ticker.".to_string();
-    //     inst_str.push_str(&item.instrument_name);
-    //     inst_str.push_str(".100ms");
-    //     &channels.insert(0, inst_str);
-    // }
-    // println!("Channels {:?}", &channels);
-    //
-    // let req = PublicSubscribeRequest::new(&channels);
-    //
-    // let _ = client.call(req).await?.await?;
-    //
-    // client
-    //     .call(SetHeartbeatRequest::with_interval(30))
-    //     .await?
-    //     .await?;
-    //
-    // while let Some(m) = subscription.next().await {
-    //
-    //     // println!("{:?}", &m?.params);
-    //     let msg = &m?.params;
-    //
-    //     if let SubscriptionParams::Heartbeat {
-    //         r#type: HeartbeatType::TestRequest,
-    //     } = &msg
-    //     {
-    //         client.call(TestRequest::default()).await?.await?;
-    //     } else {
-    //         // write_to_db(&msg);
-    //         println!("{:?}", &msg);
-    //     }
-    //
-    // }
-
     Ok(())
-
 }

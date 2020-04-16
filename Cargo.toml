@@ -1,5 +1,5 @@
 [package]
-name = "dqaunt_query_service_rust"
+name = "dqaunt"
 version = "0.1.0"
 authors = ["pavelkrolevets <pavelkrolevets@gmail.com>"]
 edition = "2018"
