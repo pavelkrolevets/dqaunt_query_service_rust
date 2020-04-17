@@ -18,10 +18,10 @@ use std::{thread, time};
 use termion::event::Key::PageUp;
 use env_logger::init;
 use fehler::throws;
+use std::sync::mpsc;
 
 
 const CONNECTION: &'static str = "wss://www.deribit.com/ws/api/v2";
-
 
 #[throws(DeribitError)]
 #[tokio::main]
@@ -111,8 +111,25 @@ async fn main() {
         .await?
         .await?;
 
-    while let Some(m) = subscription.next().await {
+    let mut instr_state = dqaunt::Data{base: 0.0, three_months: 0.0, six_months: 0.0};
 
+    let mut i = 0;
+
+    let (tx, rx) = mpsc::channel();
+
+    let thread = thread::spawn(move || {
+        let recieved = rx.recv().unwrap();
+        loop {
+            println!("hi number {} from the spawned thread!", recieved);
+            println!("Global var {:?}", dqaunt::global_state.lock().unwrap()s);
+            thread::sleep(Duration::from_millis(1000));
+        }
+
+    });
+
+    while let Some(m) = subscription.next().await {
+        tx.send(i).unwrap();
+        i +=1;
         match m?.params {
             SubscriptionParams::Heartbeat {r#type} => if let r#type = HeartbeatType::TestRequest {
                 println!("Hartbeat {:?}", r#type);
@@ -137,7 +154,7 @@ async fn main() {
                 }
             }
         }
-
     }
+    thread.join().unwrap();
 
 }

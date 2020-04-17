@@ -8,13 +8,20 @@ use std::error::Error;
 use deribit::models::subscription::TickerData;
 use std::borrow::Borrow;
 use std::ops::Deref;
+use mysql::prelude::Queryable;
+use lazy_static::lazy_static;
+use std::sync::Mutex;
 
+
+lazy_static! {
+    pub static ref global_state: Mutex<Vec<f64>> = Mutex::new(vec![]);
+}
 
 #[derive(PartialEq, Clone, Debug)]
-struct Data {
-    base: i64,
-    three_months: i64,
-    six_months: i64,
+pub struct Data {
+    pub base: f64,
+    pub three_months: f64,
+    pub six_months: f64,
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -57,25 +64,42 @@ pub struct Instruments {
 
 pub fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
     // println!("DB query ...");
-    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+
+    let url = "mysql://root:Gfdtk81,@localhost/deribit";
+    let pool = mysql::Pool::new(url)?;
+
+    let mut conn = pool.get_conn()?.unwrap();
+
     let instruments =
-        pool.prep_exec(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
-        "kind_"=> "future",
-         })
-            .map(|result| {
-                result.map(|x| x.unwrap()).map(|row| {
-                    // ⚠️ Note that from_row will panic if you don't follow your schema
-                    let (id, instrument_name, kind, expiration_timestamp, is_active, timestamp) = mysql::from_row(row);
-                    Instruments {
-                        id: id,
-                        instrument_name: instrument_name,
-                        kind: kind,
-                        expiration_timestamp: expiration_timestamp,
-                        is_active: is_active,
-                        timestamp: DateTime::from_utc(timestamp,Utc)
-                    }
-                }).collect()
-            }).unwrap();
+        conn.query_map(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=TRUE AND kind='future')) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", |(id, instrument_name, kind, expiration_timestamp, is_active, timestamp)| {
+            Instruments {
+                id: id,
+                instrument_name: instrument_name,
+                kind: kind,
+                expiration_timestamp: expiration_timestamp,
+                is_active: is_active,
+                timestamp: DateTime::from_utc(timestamp, Utc)
+            }
+        })?;
+
+    // let instruments =
+    //     pool.prep_exec(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
+    //     "kind_"=> "future",
+    //      })
+    //         .map(|result| {
+    //             result.map(|x| x.unwrap()).map(|row| {
+    //                 // ⚠️ Note that from_row will panic if you don't follow your schema
+    //                 let (id, instrument_name, kind, expiration_timestamp, is_active, timestamp) = mysql::from_row(row);
+    //                 Instruments {
+    //                     id: id,
+    //                     instrument_name: instrument_name,
+    //                     kind: kind,
+    //                     expiration_timestamp: expiration_timestamp,
+    //                     is_active: is_active,
+    //                     timestamp: DateTime::from_utc(timestamp,Utc)
+    //                 }
+    //             }).collect()
+    //         }).unwrap();
 
     // println!("Instruments {:?}", instruments);
 
@@ -167,53 +191,22 @@ pub fn get_expiration (msg: TickerData) -> Result<(), Box<dyn Error>>{
         }
     }
 
-    write_to_db(msg, exp, currency).unwrap();
-
-    Ok(())
-}
-
-pub fn write_to_db (msg: TickerData, exp: Expiration, currency: InstrumentType) -> Result<(), Box<dyn Error>> {
+    // write_to_db(msg, exp, currency).unwrap();
+    test_db()?;
 
     match currency {
         InstrumentType::BTC => {
             match exp {
                 Expiration::Base => {
-                    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-                    for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc (base, is_active) VALUE (:base, :is_active)").into_iter() {
-                                    stmt.execute(params!{
-                                    "base" => 0i8,
-                                    "is_active" => 1i8,
-                               }).unwrap();
-                    }
+                    global_state.lock().unwrap().push(1f64);
+
                     println!("Insert BTC Perpetual {:?}", &msg.instrument_name)
                 },
                 Expiration::Three=>{
-                    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-                    for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
-                                       (`three_months`, `is_active`)
-                                   VALUES
-                                       (:three_months, :is_active)").into_iter() {
-                        stmt.execute(params! {
-                                    "three_months" => &msg.last_price,
-                                    "is_active" => true,
-                               }).unwrap();
-                    }
                     println!("Insert BTC Three {:?}", &msg.instrument_name)
-
                 },
                 Expiration::Six  => {
-                    let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-                    for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
-                                       (`six_months`, `is_active`)
-                                   VALUES
-                                       (:six_months, :is_active)").into_iter() {
-                        stmt.execute(params! {
-                                    "six_months" => &msg.last_price,
-                                    "is_active" => true,
-                               }).unwrap();
-                    }
                     println!("Insert BTC Six {:?}", &msg.instrument_name)
-
                 }
             }
         }
@@ -225,6 +218,93 @@ pub fn write_to_db (msg: TickerData, exp: Expiration, currency: InstrumentType) 
             }
         }
     }
+    Ok(())
+}
+
+// pub fn write_to_db (msg: TickerData, exp: Expiration, currency: InstrumentType) -> Result<(), Box<dyn Error>> {
+//
+//     match currency {
+//         InstrumentType::BTC => {
+//             match exp {
+//                 Expiration::Base => {
+//                     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+//                     for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc (base`, is_active`) VALUES(:base, :is_active)").into_iter() {
+//                                     stmt.execute(params!{
+//                                     "base" => 0i8,
+//                                     "is_active" => 1i8,
+//                                }).unwrap();
+//                     }
+//                     println!("Insert BTC Perpetual {:?}", &msg.instrument_name)
+//                 },
+//                 Expiration::Three=>{
+//                     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+//                     for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
+//                                        (`three_months`, `is_active`)
+//                                    VALUES
+//                                        (:three_months, :is_active)").into_iter() {
+//                         stmt.execute(params! {
+//                                     "three_months" => &msg.last_price,
+//                                     "is_active" => true,
+//                                }).unwrap();
+//                     }
+//                     println!("Insert BTC Three {:?}", &msg.instrument_name)
+//
+//                 },
+//                 Expiration::Six  => {
+//                     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+//                     for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
+//                                        (`six_months`, `is_active`)
+//                                    VALUES
+//                                        (:six_months, :is_active)").into_iter() {
+//                         stmt.execute(params! {
+//                                     "six_months" => &msg.last_price,
+//                                     "is_active" => true,
+//                                }).unwrap();
+//                     }
+//                     println!("Insert BTC Six {:?}", &msg.instrument_name)
+//
+//                 }
+//             }
+//         }
+//         InstrumentType::ETH => {
+//             match exp {
+//                 Expiration::Base => println!("Insert ETH Perpetual {:?}", &msg.instrument_name),
+//                 Expiration::Three =>println!("Insert ETH Three {:?}", &msg.instrument_name),
+//                 Expiration::Six => println!("Insert EHT Six {:?}", &msg.instrument_name)
+//             }
+//         }
+//     }
+//
+//     Ok(())
+// }
+
+pub fn test_db ()->  Result<(), Box<dyn Error>> {
+
+    let url = "mysql://root:Gfdtk81,@localhost/deribit";
+    let pool = mysql::Pool::new(url)?;
+
+    // let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
+
+    let mut conn = pool.get_conn()?.unwrap();
+    let ping = conn.ping();
+
+    println!("Connected to db {:?}", ping);
+
+    conn.exec_drop(r"INSERT INTO futures_contango_btc (perpetual)
+      VALUES(:perpetual)",
+              params! {
+                "perpetual" => 0f32,
+    }
+    )?;
+
+    // for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc (base, is_active) VALUES(:base, :is_active)").into_iter() {
+    //     stmt.execute(params!{
+    //                                 "base" => 0i8,
+    //                                 "is_active" => 1i8,
+    //                            }).unwrap();
+    // }
+
 
     Ok(())
+
 }
