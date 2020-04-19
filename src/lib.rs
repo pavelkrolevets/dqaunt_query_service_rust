@@ -1,4 +1,6 @@
-#[macro_use] extern crate mysql;
+#[macro_use]
+extern crate mysql;
+extern crate lazy_static;
 use chrono::*;
 // use std::time::{SystemTime, UNIX_EPOCH, Duration};
 // //use std::borrow::Borrow;
@@ -10,19 +12,20 @@ use std::borrow::Borrow;
 use std::ops::Deref;
 use mysql::prelude::Queryable;
 use lazy_static::lazy_static;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, Arc};
+use std::collections::HashMap;
+use std::sync::mpsc::Sender;
 
-
-lazy_static! {
-    pub static ref global_state: Mutex<Vec<f64>> = Mutex::new(vec![]);
-}
-
-#[derive(PartialEq, Clone, Debug)]
-pub struct Data {
-    pub base: f64,
-    pub three_months: f64,
-    pub six_months: f64,
-}
+// lazy_static! {
+//     pub static ref STATE: Mutex<HashMap<&'static str, f64>> = Mutex::new({
+//         let mut m = HashMap::new();
+//         m.insert("perpetual", 0f64);
+//         m.insert("three", 0f64);
+//         m.insert("six", 0f64);
+//         m
+//     });
+//     // pub static ref global_state_btc: Mutex<HashMap<&'static str, f64>> = Mutex::new(HashMap::new());
+// }
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Expiration {
@@ -60,6 +63,10 @@ pub struct Instruments {
 // pub fn hello_world(args: Vec<&str>) -> Result<(), Error> {
 //     println!("Args {:?}", args);
 //     Ok(())
+// }
+
+// pub fn get_global_state<'a>() -> MutexGuard<'a, HashMap<&'static str, f64>> {
+//     STATE.lock().unwrap()
 // }
 
 pub fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
@@ -112,9 +119,9 @@ pub fn get_timestamp (timestamp: i64) -> Result<DateTime<Utc>, Box<dyn Error>> {
     Ok(datetime)
 }
 
-pub fn get_expiration (msg: TickerData) -> Result<(), Box<dyn Error>>{
+pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mutex<HashMap<&'static str, f64>>>) -> Result<(), Box<dyn Error>>{
 
-    let instr = get_instruments().unwrap();
+    // let instr = get_instruments().unwrap();
     let mut instr_btc= vec![];
     let mut instr_eth= vec![];
 
@@ -192,93 +199,78 @@ pub fn get_expiration (msg: TickerData) -> Result<(), Box<dyn Error>>{
     }
 
     // write_to_db(msg, exp, currency).unwrap();
-    test_db()?;
 
     match currency {
         InstrumentType::BTC => {
             match exp {
                 Expiration::Base => {
-                    global_state.lock().unwrap().push(1f64);
 
-                    println!("Insert BTC Perpetual {:?}", &msg.instrument_name)
+                    let mut x = data.lock().unwrap();
+                    *x.get_mut(&"btc_perpetual").unwrap() = msg.last_price.unwrap();
+
+
+                    // if let Some(x) = STATE.lock().unwrap().get_mut(&"perpetual") {
+                    //     *x = msg.last_price.unwrap();
+                    // }
+
+                    // println!("Insert BTC Perpetual {:?}, last {:?}", &msg.instrument_name, &msg.last_price.unwrap())
                 },
                 Expiration::Three=>{
-                    println!("Insert BTC Three {:?}", &msg.instrument_name)
+
+                    let mut x = data.lock().unwrap();
+                    *x.get_mut(&"btc_three").unwrap() = msg.last_price.unwrap();
+
+                    // if let Some(x) = STATE.lock().unwrap().get_mut(&"three") {
+                    //     *x = msg.last_price.unwrap();
+                    // }
+
+                    // println!("Insert BTC Three {:?}", &msg.instrument_name)
                 },
                 Expiration::Six  => {
-                    println!("Insert BTC Six {:?}", &msg.instrument_name)
+
+                    let mut x = data.lock().unwrap();
+                    *x.get_mut(&"btc_six").unwrap() = msg.last_price.unwrap();
+
+                    // if let Some(x) = STATE.lock().unwrap().get_mut(&"six") {
+                    //     *x = msg.last_price.unwrap();
+                    // }
+
+                    // println!("Insert BTC Six {:?}", &msg.instrument_name)
                 }
             }
         }
         InstrumentType::ETH => {
             match exp {
-                Expiration::Base => println!("Insert ETH Perpetual {:?}", &msg.instrument_name),
-                Expiration::Three =>println!("Insert ETH Three {:?}", &msg.instrument_name),
-                Expiration::Six => println!("Insert EHT Six {:?}", &msg.instrument_name)
+                Expiration::Base => {
+                    let mut x = data.lock().unwrap();
+                    *x.get_mut(&"eth_perpetual").unwrap() = msg.last_price.unwrap();
+                    // println!("Insert ETH Perpetual {:?}", &msg.instrument_name)
+                },
+                Expiration::Three => {
+                    let mut x = data.lock().unwrap();
+                    *x.get_mut(&"eth_three").unwrap() = msg.last_price.unwrap();
+                    // println!("Insert ETH Three {:?}", &msg.instrument_name)
+                },
+                Expiration::Six => {
+                    let mut x = data.lock().unwrap();
+                    *x.get_mut(&"eth_six").unwrap() = msg.last_price.unwrap();
+                    // println!("Insert EHT Six {:?}", &msg.instrument_name)
+                }
             }
         }
     }
+
+
+    // let state = get_global_state();
+    // println!("Global var {:?} {:?} {:?}", &state.get(&"perpetual"),
+    //                           &state.get(&"three"),
+    //                           &state.get(&"six")
+    //                  );
+
     Ok(())
 }
 
-// pub fn write_to_db (msg: TickerData, exp: Expiration, currency: InstrumentType) -> Result<(), Box<dyn Error>> {
-//
-//     match currency {
-//         InstrumentType::BTC => {
-//             match exp {
-//                 Expiration::Base => {
-//                     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-//                     for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc (base`, is_active`) VALUES(:base, :is_active)").into_iter() {
-//                                     stmt.execute(params!{
-//                                     "base" => 0i8,
-//                                     "is_active" => 1i8,
-//                                }).unwrap();
-//                     }
-//                     println!("Insert BTC Perpetual {:?}", &msg.instrument_name)
-//                 },
-//                 Expiration::Three=>{
-//                     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-//                     for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
-//                                        (`three_months`, `is_active`)
-//                                    VALUES
-//                                        (:three_months, :is_active)").into_iter() {
-//                         stmt.execute(params! {
-//                                     "three_months" => &msg.last_price,
-//                                     "is_active" => true,
-//                                }).unwrap();
-//                     }
-//                     println!("Insert BTC Three {:?}", &msg.instrument_name)
-//
-//                 },
-//                 Expiration::Six  => {
-//                     let pool = mysql::Pool::new("mysql://root:Gfdtk81,@localhost/deribit").unwrap();
-//                     for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc
-//                                        (`six_months`, `is_active`)
-//                                    VALUES
-//                                        (:six_months, :is_active)").into_iter() {
-//                         stmt.execute(params! {
-//                                     "six_months" => &msg.last_price,
-//                                     "is_active" => true,
-//                                }).unwrap();
-//                     }
-//                     println!("Insert BTC Six {:?}", &msg.instrument_name)
-//
-//                 }
-//             }
-//         }
-//         InstrumentType::ETH => {
-//             match exp {
-//                 Expiration::Base => println!("Insert ETH Perpetual {:?}", &msg.instrument_name),
-//                 Expiration::Three =>println!("Insert ETH Three {:?}", &msg.instrument_name),
-//                 Expiration::Six => println!("Insert EHT Six {:?}", &msg.instrument_name)
-//             }
-//         }
-//     }
-//
-//     Ok(())
-// }
-
-pub fn test_db ()->  Result<(), Box<dyn Error>> {
+pub fn write_to_db (data: &Arc<Mutex<HashMap<&'static str, f64>>>)->  Result<(), Box<dyn Error>> {
 
     let url = "mysql://root:Gfdtk81,@localhost/deribit";
     let pool = mysql::Pool::new(url)?;
@@ -288,22 +280,33 @@ pub fn test_db ()->  Result<(), Box<dyn Error>> {
     let mut conn = pool.get_conn()?.unwrap();
     let ping = conn.ping();
 
-    println!("Connected to db {:?}", ping);
+    // println!("Connected to db {:?}", ping);
+    let x = data.lock().unwrap();
+    let btc_perp = *x.get("btc_perpetual").unwrap();
+    let btc_three = *x.get("btc_three").unwrap();
+    let btc_six = *x.get("btc_six").unwrap();
 
-    conn.exec_drop(r"INSERT INTO futures_contango_btc (perpetual)
-      VALUES(:perpetual)",
+    conn.exec_drop(r"INSERT INTO futures_contango_btc (perpetual, three_months, six_months)
+      VALUES(:perpetual, :three_months, :six_months)",
               params! {
-                "perpetual" => 0f32,
+                "perpetual" => btc_perp,
+                "three_months" => btc_three,
+                "six_months" => btc_six,
     }
     )?;
 
-    // for mut stmt in pool.prepare(r"INSERT INTO futures_contango_btc (base, is_active) VALUES(:base, :is_active)").into_iter() {
-    //     stmt.execute(params!{
-    //                                 "base" => 0i8,
-    //                                 "is_active" => 1i8,
-    //                            }).unwrap();
-    // }
+    let eth_perp = *x.get("eth_perpetual").unwrap();
+    let eth_three = *x.get("eth_three").unwrap();
+    let eth_six = *x.get("eth_six").unwrap();
 
+    conn.exec_drop(r"INSERT INTO futures_contango_eth (perpetual, three_months, six_months)
+      VALUES(:perpetual, :three_months, :six_months)",
+                   params! {
+                "perpetual" => eth_perp,
+                "three_months" => eth_three,
+                "six_months" => eth_six,
+    }
+    )?;
 
     Ok(())
 

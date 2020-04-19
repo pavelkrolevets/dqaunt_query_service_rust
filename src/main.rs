@@ -19,6 +19,10 @@ use termion::event::Key::PageUp;
 use env_logger::init;
 use fehler::throws;
 use std::sync::mpsc;
+use serde_json::error::Category::Data;
+use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard, Arc};
+use dqaunt::Instruments;
 
 
 const CONNECTION: &'static str = "wss://www.deribit.com/ws/api/v2";
@@ -26,33 +30,7 @@ const CONNECTION: &'static str = "wss://www.deribit.com/ws/api/v2";
 #[throws(DeribitError)]
 #[tokio::main]
 async fn main() {
-    // let stdout = stdout();
-    // let mut stdout = stdout.lock();
-    // let stdin = stdin();
-    // let mut stdin = stdin.lock();
-    //
-    // loop {
-    //     stdout.write_all(b"input: ").unwrap();
-    //     stdout.flush().unwrap();
-    //
-    //     let input = stdin.read_line();
-    //
-    //     if let Ok(Some(input)) = input {
-    //         let args: Vec<&str> = input.as_str().split_whitespace().collect();
-    //         if args.len() == 0 {
-    //             stdout.write_all("Please input something".as_bytes()).unwrap();
-    //             stdout.write_all(b"\n").unwrap();
-    //         } else {
-    //             if let Err(e) = parse_stdin(args){
-    //                 stdout.write_all(Error.to_string().as_bytes());
-    //                 stdout.write_all(b"\n").unwrap();
-    //             }
-    //             sleep(Duration::from_millis(100));
-    //         }
-    //     } else {
-    //         stdout.write_all(b"Error\n").unwrap();
-    //     }
-    // }
+
     let _ = dotenv();
     init();
     println!("Connecting to {}", CONNECTION);
@@ -90,7 +68,12 @@ async fn main() {
     // }
 
 
-    let instruments = dqaunt::get_instruments().unwrap();
+    let instruments = dqaunt::get_instruments();
+
+    let instruments = match instruments {
+        Ok(i) => i,
+        Err(e)=> panic!("Cant get instruments from DB: {:?}", e)
+    };
 
     let mut channels = vec![];
 
@@ -111,25 +94,52 @@ async fn main() {
         .await?
         .await?;
 
-    let mut instr_state = dqaunt::Data{base: 0.0, three_months: 0.0, six_months: 0.0};
+    let data = Arc::new(Mutex::new({
+        let mut m = HashMap::new();
+        m.insert("btc_perpetual", 0f64);
+        m.insert("btc_three", 0f64);
+        m.insert("btc_six", 0f64);
+        m.insert("eth_perpetual", 0f64);
+        m.insert("eth_three", 0f64);
+        m.insert("eth_six", 0f64);
+        m
+    })
+    );
 
-    let mut i = 0;
+    let data_mut = data.clone();
 
-    let (tx, rx) = mpsc::channel();
+    let data_read = data.clone();
 
     let thread = thread::spawn(move || {
-        let recieved = rx.recv().unwrap();
         loop {
-            println!("hi number {} from the spawned thread!", recieved);
-            println!("Global var {:?}", dqaunt::global_state.lock().unwrap()s);
-            thread::sleep(Duration::from_millis(1000));
+            // let recieved: Option<&f64> = rx.recv().unwrap();
+            println!("Result: {:?}", *data.lock().unwrap());
+
+            let wr_db = dqaunt::write_to_db(&data_read);
+
+            match wr_db {
+                Ok(()) => println!("Written to db."),
+                Err(e)=> panic!("Cant write to DB: {:?}", e)
+            };
+
+            thread::sleep(Duration::from_millis(5000));
         }
 
     });
 
+    // let instr = dqaunt::get_instruments();
+    //
+    // let instr = match instr {
+    //     Ok(i) => i,
+    //     Err(e)=> panic!("Cant get instruments from DB: {:?}", e)
+    // };
+
     while let Some(m) = subscription.next().await {
-        tx.send(i).unwrap();
-        i +=1;
+
+        // let mut base_guard = data_mut.lock().unwrap();
+        // *base_guard.base += 1f64;
+
+
         match m?.params {
             SubscriptionParams::Heartbeat {r#type} => if let r#type = HeartbeatType::TestRequest {
                 println!("Hartbeat {:?}", r#type);
@@ -150,11 +160,12 @@ async fn main() {
                     SubscriptionData::UserOrdersBatch(UserOrdersData) => (),
                     SubscriptionData::UserPortfolio(UserPortfolioData) => (),
                     SubscriptionData::UserTrades(UserTradesData) => (),
-                    SubscriptionData::Ticker(ticker_data) => {dqaunt::get_expiration(ticker_data).unwrap()}
+                    SubscriptionData::Ticker(ticker_data) => {dqaunt::get_expiration(ticker_data, &instruments, &data_mut).unwrap()}
                 }
             }
         }
     }
+
     thread.join().unwrap();
 
 }
