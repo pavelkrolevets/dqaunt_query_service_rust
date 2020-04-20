@@ -40,16 +40,15 @@ pub enum InstrumentType {
     ETH,
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(Debug)]
 pub struct Instruments {
-    pub id: u8,
+    // pub id: u8,
     pub instrument_name: String,
     pub kind: String,
     pub expiration_timestamp: i64,
     pub is_active: bool,
-    pub timestamp: DateTime<Utc>
+    // pub timestamp: DateTime<Utc>
 }
-
 
 // pub fn parse_stdin(args: Vec<&str>) -> Result<(), Error>{
 //     match args[0] {
@@ -69,7 +68,7 @@ pub struct Instruments {
 //     STATE.lock().unwrap()
 // }
 
-pub fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
+pub async fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
     // println!("DB query ...");
 
     let url = "mysql://root:Gfdtk81,@localhost/deribit";
@@ -78,19 +77,19 @@ pub fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
     let mut conn = pool.get_conn()?.unwrap();
 
     let instruments =
-        conn.query_map(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=TRUE AND kind='future')) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", |(id, instrument_name, kind, expiration_timestamp, is_active, timestamp)| {
+        conn.query_map(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=TRUE AND kind='future')) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", |(instrument_name, kind, expiration_timestamp, is_active)| {
             Instruments {
-                id: id,
+                // id: id,
                 instrument_name: instrument_name,
                 kind: kind,
                 expiration_timestamp: expiration_timestamp,
                 is_active: is_active,
-                timestamp: DateTime::from_utc(timestamp, Utc)
+                // timestamp: DateTime::from_utc(timestamp, Utc)
             }
         })?;
 
-    // let instruments =
-    //     pool.prep_exec(r"SELECT tt.* FROM instruments tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
+    // let instruments_db =
+    //     pool.prep_exec(r"SELECT tt.* FROM instruments_db tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments_db WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
     //     "kind_"=> "future",
     //      })
     //         .map(|result| {
@@ -108,7 +107,7 @@ pub fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
     //             }).collect()
     //         }).unwrap();
 
-    // println!("Instruments {:?}", instruments);
+    // println!("Instruments {:?}", instruments_db);
 
     Ok(instruments)
 }
@@ -138,14 +137,14 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
     // &instr_btc.sort_by(|a, b| b.expiration_timestamp.cmp(&a.expiration_timestamp));
     // &instr_eth.sort_by(|a, b| b.expiration_timestamp.cmp(&a.expiration_timestamp));
     //
-    // println!("BTC instruments by timestamp {:?}", &instr_btc);
-    // println!("ETH instruments by timestamp {:?}", &instr_eth);
+    // println!("BTC instruments_db by timestamp {:?}", &instr_btc);
+    // println!("ETH instruments_db by timestamp {:?}", &instr_eth);
 
     let mut exp = Expiration::Base;
     let mut currency = InstrumentType::BTC;
 
     if msg.instrument_name[..3] == "BTC".to_string() {
-        let mut currency = InstrumentType::BTC;
+        currency = InstrumentType::BTC;
         for item in instr_btc.iter() {
             if (item.instrument_name == msg.instrument_name) && (item.instrument_name != "BTC-PERPETUAL".to_string()) {
                 // println!("Found {:?}, expiration {:?}", &msg.instrument_name, &item.expiration_timestamp);
@@ -154,7 +153,7 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
                 // let newdate = msg_exp.format("%Y-%m-%d %H:%M:%S").to_string();
                 // println!("Found {:?}, datetime {:?}", &msg.instrument_name, &newdate);
 
-                // find expiration of the futures
+                // find expiration of the future
                 for i in instr_btc.iter() {
                     if i.instrument_name != "BTC-PERPETUAL".to_string() {
                         // let i_exp = get_timestamp(i.expiration_timestamp).unwrap();
@@ -165,7 +164,7 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
                         }
                     }
                 }
-            } else if (item.instrument_name == msg.instrument_name) && (item.instrument_name == "BTC-PERPETUAL".to_string()) {
+            } else if (item.instrument_name == msg.instrument_name) && (msg.instrument_name == "BTC-PERPETUAL".to_string()) {
                 exp = Expiration::Base
             }
         }
@@ -182,10 +181,11 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
                 // println!("Found {:?}, datetime {:?}", &msg.instrument_name, &newdate);
 
                 // find expiration of the futures
-                for i in instr_btc.iter() {
+                for i in instr_eth.iter() {
                     if i.instrument_name != "ETH-PERPETUAL".to_string() {
                         // let i_exp = get_timestamp(i.expiration_timestamp).unwrap();
                         if item.expiration_timestamp > i.expiration_timestamp {
+                            // println!("Here {:?}, {:?}, {:?}", currency, exp, msg.instrument_name);
                             exp = Expiration::Six
                         } else if item.expiration_timestamp < i.expiration_timestamp {
                             exp = Expiration::Three
@@ -199,7 +199,8 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
     }
 
     // write_to_db(msg, exp, currency).unwrap();
-
+    // println!("Currency {:?}", currency);
+    // println!("Expiration {:?}", exp);
     match currency {
         InstrumentType::BTC => {
             match exp {
@@ -213,7 +214,7 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
                     //     *x = msg.last_price.unwrap();
                     // }
 
-                    // println!("Insert BTC Perpetual {:?}, last {:?}", &msg.instrument_name, &msg.last_price.unwrap())
+                    println!("Insert BTC Perpetual {:?}, last {:?}, timestamp {:?}", &msg.instrument_name, &msg.last_price.unwrap(), &msg.timestamp)
                 },
                 Expiration::Three=>{
 
@@ -224,7 +225,7 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
                     //     *x = msg.last_price.unwrap();
                     // }
 
-                    // println!("Insert BTC Three {:?}", &msg.instrument_name)
+                    // println!("Insert BTC Three {:?}, last {:?}", &msg.instrument_name, &msg.last_price.unwrap())
                 },
                 Expiration::Six  => {
 
@@ -244,12 +245,13 @@ pub fn get_expiration(msg: TickerData, instr: &Vec<Instruments>, data: &Arc<Mute
                 Expiration::Base => {
                     let mut x = data.lock().unwrap();
                     *x.get_mut(&"eth_perpetual").unwrap() = msg.last_price.unwrap();
-                    // println!("Insert ETH Perpetual {:?}", &msg.instrument_name)
+                    // println!("Insert ETH Perpetual {:?}, last {:?}", &msg.instrument_name, &msg.last_price.unwrap())
+
                 },
                 Expiration::Three => {
                     let mut x = data.lock().unwrap();
                     *x.get_mut(&"eth_three").unwrap() = msg.last_price.unwrap();
-                    // println!("Insert ETH Three {:?}", &msg.instrument_name)
+                    // println!("Insert ETH Three {:?}, last {:?}", &msg.instrument_name, &msg.last_price.unwrap())
                 },
                 Expiration::Six => {
                     let mut x = data.lock().unwrap();
