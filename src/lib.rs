@@ -88,27 +88,6 @@ pub async fn get_instruments() -> Result<Vec<Instruments>, Box<dyn Error>>{
             }
         })?;
 
-    // let instruments_db =
-    //     pool.prep_exec(r"SELECT tt.* FROM instruments_db tt INNER JOIN (SELECT instrument_name, MAX(timestamp) AS MaxDateTime FROM instruments_db WHERE (is_active=:is_active_ AND kind=:kind_)) groupedtt  ON tt.timestamp = groupedtt.MaxDateTime", params! { "is_active_" => 1i8,
-    //     "kind_"=> "future",
-    //      })
-    //         .map(|result| {
-    //             result.map(|x| x.unwrap()).map(|row| {
-    //                 // ⚠️ Note that from_row will panic if you don't follow your schema
-    //                 let (id, instrument_name, kind, expiration_timestamp, is_active, timestamp) = mysql::from_row(row);
-    //                 Instruments {
-    //                     id: id,
-    //                     instrument_name: instrument_name,
-    //                     kind: kind,
-    //                     expiration_timestamp: expiration_timestamp,
-    //                     is_active: is_active,
-    //                     timestamp: DateTime::from_utc(timestamp,Utc)
-    //                 }
-    //             }).collect()
-    //         }).unwrap();
-
-    // println!("Instruments {:?}", instruments_db);
-
     Ok(instruments)
 }
 

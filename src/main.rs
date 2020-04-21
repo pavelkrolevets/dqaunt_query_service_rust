@@ -123,11 +123,6 @@ async fn main() {
 
     let _ = client.call(req).await?.await?;
 
-    // client
-    //     .call(SetHeartbeatRequest::with_interval(30))
-    //     .await?
-    //     .await?;
-
     let data = Arc::new(Mutex::new({
         let mut m = HashMap::new();
         m.insert("btc_perpetual", 0f64);
@@ -171,6 +166,10 @@ async fn main() {
     //         thread::sleep(Duration::from_millis(30000));
     //     }
     // });
+    let resp = client.call(SetHeartbeatRequest::with_interval(10)).await?;
+    println!("Hearbet response {:?}", resp.await?);
+
+
     let data_mut = data.clone();
 
     while let Some(m) = subscription.next().await {
@@ -180,9 +179,13 @@ async fn main() {
 
 
         match m?.params {
-            SubscriptionParams::Heartbeat {r#type} => if let r#type = HeartbeatType::TestRequest {
-                println!("Hartbeat {:?}", r#type);
-            }
+            SubscriptionParams::Heartbeat { r#type: ty } => match ty {
+                HeartbeatType::TestRequest => {
+                    println!("Test Requested");
+                    client.call(TestRequest::default()).await?;
+                }
+                _ => println!("Heartbeat"),
+            },
             SubscriptionParams::Subscription {channel, data} => {
                 match data {
                     SubscriptionData::Announcements(AnnouncementsData) => (),
@@ -201,7 +204,8 @@ async fn main() {
                     SubscriptionData::UserTrades(UserTradesData) => (),
                     SubscriptionData::Ticker(ticker_data) => dqaunt::get_expiration(ticker_data, &instruments, &data_mut).unwrap()
                 }
-            }
+            },
+            _ => {}
         }
     }
 
